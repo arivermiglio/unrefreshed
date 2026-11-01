@@ -1,5 +1,7 @@
 # unrefreshed
 
+https://arivermiglio.github.io/unrefreshed/
+
 tech spec: JavaScript ES6, HTML5, 0 dependencies, 0 generative AI, GPLv3
 
 Dynamic Random-Access Memory (DRAM) stores each bit as a charge in a capacitor. Left alone, that charge leaks to ground, taking the data with it. Because DRAM must be sustained by a refresh controller that recharges it many times a second, digital permanence is a continuous battle against decay. When memory is lost or erased, residual charges, garbage values, and dangling pointers linger in the address space.
