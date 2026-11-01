@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNREFRESHED</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #050206;
+      overflow: hidden;
+    }
+
+    #viewport {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      cursor: crosshair;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="viewport"></canvas>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const CONFIG = Object.freeze({
+        GRID_W: 128,
+        GRID_H: 96,
+        LAYER_COUNT: 3,
+        LAYER_BYTES: 128 * 96,
+
+        CLOCK_HZ: 60,
+        LAYER_DIVIDER: [3, 2, 1],
+
+        GHOST: {
+          BASE_ALPHA: 0.10,
+          PULSE_AMPLITUDE: 0.06,
+          SURGE_ALPHA: 0.26,
+          IVORY_BOOST: 0.05,
+          CRIMSON_SCALE: 0.55,
+          BUZZ_SPEED: 0.045,
+          PULSE_SPEED: 0.016,
+          JITTER_HIGH_THRESH: 0.68,
+          JITTER_LOW_THRESH: -0.72,
+          JITTER_MAX_PX: 2,
+          JITTER_MIN_PX: 1
+        },
+
+        ASH_FLAKES: {
+          MAX_COUNT: 180,
+          SPAWN_BURST: 2,
+          MIN_SIZE_PX: 2.5,
+          MAX_SIZE_PX: 6.5,
+          MIN_ASPECT: 0.45,
+          MAX_ASPECT: 1.45,
+          MIN_RISE_SPEED: 0.035,
+          MAX_RISE_SPEED: 0.095,
+          HORIZONTAL_SPREAD: 0.05,
+          SWAY_AMPLITUDE: 0.032,
+          SWAY_FREQUENCY: 0.0035,
+          MIN_DECAY: 0.004,
+          MAX_DECAY: 0.010,
+          PEAK_ALPHA: 0.72,
+          SHIMMER_SPEED: 0.022,
+          TUMBLE_SPEED: 0.018,
+          COLOR_DARK: [84, 88, 96],
+          COLOR_MID: [148, 152, 162],
+          COLOR_LIGHT: [222, 226, 234]
+        },
+
+        LAYER: {
+          FAR: 0,
+          MID: 1,
+          NEAR: 2
+        },
+
+        STATE: {
+          EMPTY: 0x0,
+          POWERED: 0x1,
+          UNPOWERED: 0x2,
+          RUIN: 0x3,
+          SOIL: 0x4,
+          PLANT: 0x5
+        },
+
+        PART: {
+          RUBBLE: 3,
+          THORN: 4,
+          FALLEN_CAP: 5,
+          BASE: 6,
+          ARCH: 7,
+          GABLE: 8,
+          TRACERY: 9,
+          SPIRE: 10,
+          PARAPET: 11,
+          FLYER: 12,
+          CAPITAL: 13,
+          COLUMN: 14,
+          PIER: 15
+        },
+
+        TREE_PART: {
+          TRUNK: 13,
+          BOUGH: 14,
+          TWIG: 15
+        },
+
+        MASK_STATE: 0xF0,
+        MASK_PART: 0x0F,
+        SHIFT_STATE: 4,
+        MAX_PART: 15,
+
+        FLAG_POWERED: 0x01,
+        FLAG_TRACE: 0x02,
+        FLAG_HAUNTED: 0x04,
+        FLAG_GROUNDED: 0x10,
+        FLAG_KEEP: 0x20,
+
+        MAX_SPAN: 8,
+        KEEP_RATIO: 0.05,
+
+        RAS_MAX_BYTES_PER_SCAN: 260,
+        RAS_SWEEP_ROWS_PER_FRAME: 3,
+
+        HOLD_TICKS: 160,
+        MAX_STRENGTH: 100,
+        HAUNTED_STRENGTH: 68,
+        IVY_CLIMB_READY: 42,
+        IVY_SIDE_READY: 54,
+        IVY_WEAKEN_START: 45,
+
+        COOL_RATE: 0.05,
+        AGE_RATE: 0.015,
+        IVY_START_PROB: 0.25,
+        IVY_START_VAL: 10,
+        IVY_GROW_STEP: 2,
+        IVY_CLIMB_PROB: 0.28,
+        WEAKEN_PROB: 0.50,
+        TOP_EXPOSED_WEAKEN_PROB: 0.38,
+        ERODE_TOP_PROB: 0.085,
+        RUBBLE_CLEAR_PROB: 0.06,
+
+        MIN_W: 9,
+        MIN_H: 9,
+
+        COLORS: {
+          SKY_TOP: [5, 2, 7],
+          SKY_UPPER: [16, 5, 16],
+          SKY_MID: [34, 8, 22],
+          SKY_LOW: [58, 13, 28],
+          SKY_HORIZON: [88, 22, 34],
+
+          FAR_CRAGS: [11, 4, 12],
+          FAR_CRAGS_RIM: [58, 24, 38],
+
+          LAYERS: [
+            {
+              hillBody: [16, 7, 16],
+              hillShadow: [10, 4, 11],
+              hillRim: [78, 42, 54],
+              fogColor: "rgba(52, 14, 28, 0.24)",
+              poweredMain: [228, 214, 198],
+              poweredShadow: [132, 96, 98],
+              poweredTrim: [218, 168, 78],
+              unpoweredMain: [118, 98, 110],
+              unpoweredShadow: [64, 48, 58],
+              unpoweredTrim: [148, 118, 116],
+              ruinMain: [78, 58, 68],
+              ruinShadow: [42, 28, 36],
+              ruinCrack: [16, 6, 12],
+              ghostGold: [228, 178, 88],
+              ghostCrimson: [196, 42, 74],
+              ghostIvory: [244, 228, 214],
+              briarStem: [38, 58, 48],
+              briarThorn: [64, 22, 36],
+              briarVein: [176, 26, 44],
+              briarBloom: [228, 64, 72],
+              treeBark: [28, 16, 24],
+              treeTwig: [68, 42, 52]
+            },
+            {
+              hillBody: [22, 8, 18],
+              hillShadow: [13, 4, 12],
+              hillRim: [108, 56, 58],
+              fogColor: "rgba(42, 10, 22, 0.30)",
+              poweredMain: [242, 230, 214],
+              poweredShadow: [146, 102, 96],
+              poweredTrim: [238, 186, 76],
+              unpoweredMain: [132, 108, 118],
+              unpoweredShadow: [72, 52, 62],
+              unpoweredTrim: [168, 134, 126],
+              ruinMain: [88, 64, 72],
+              ruinShadow: [46, 30, 38],
+              ruinCrack: [14, 4, 10],
+              ghostGold: [242, 194, 96],
+              ghostCrimson: [218, 46, 78],
+              ghostIvory: [252, 238, 224],
+              briarStem: [42, 68, 52],
+              briarThorn: [78, 22, 38],
+              briarVein: [204, 28, 46],
+              briarBloom: [245, 76, 82],
+              treeBark: [24, 12, 18],
+              treeTwig: [82, 48, 56]
+            },
+            {
+              hillBody: [12, 4, 10],
+              hillShadow: [6, 2, 6],
+              hillRim: [136, 74, 62],
+              fogColor: "rgba(26, 6, 14, 0.36)",
+              poweredMain: [252, 244, 230],
+              poweredShadow: [158, 108, 98],
+              poweredTrim: [252, 204, 84],
+              unpoweredMain: [144, 118, 126],
+              unpoweredShadow: [78, 54, 64],
+              unpoweredTrim: [182, 146, 132],
+              ruinMain: [96, 68, 76],
+              ruinShadow: [48, 28, 36],
+              ruinCrack: [10, 2, 6],
+              ghostGold: [255, 210, 104],
+              ghostCrimson: [238, 52, 84],
+              ghostIvory: [255, 246, 234],
+              briarStem: [46, 76, 56],
+              briarThorn: [92, 20, 38],
+              briarVein: [232, 30, 48],
+              briarBloom: [255, 92, 88],
+              treeBark: [18, 8, 14],
+              treeTwig: [96, 54, 60]
+            }
+          ]
+        }
+      });
+
+      class Builder {
+        static pickStyle(w, h) {
+          const ratio = w / Math.max(1, h);
+          if (ratio >= 2.0) return "CLOISTER";
+          if (ratio >= 1.28) return "NAVE";
+          if (ratio <= 0.82) return "BELFRY";
+          return "CATHEDRAL";
+        }
+
+        static makePlan(x0, y0, x1, y1, layer) {
+          const P = CONFIG.PART;
+          const left = Math.max(3, Math.min(x0, x1));
+          const right = Math.min(CONFIG.GRID_W - 4, Math.max(x0, x1));
+          const top = Math.max(3, Math.min(y0, y1));
+
+          const midX = Math.floor((left + right) * 0.5);
+          const groundY = layer.getGroundY(midX);
+          const roofTop = Math.min(top, groundY - CONFIG.MIN_H);
+
+          const w = (right - left) + 1;
+          const h = (groundY - roofTop) + 1;
+          if (w < CONFIG.MIN_W || h < CONFIG.MIN_H) {
+            return [];
+          }
+
+          const style = this.pickStyle(w, h);
+          const map = new Map();
+          const put = (x, y, part) => {
+            if (x >= 1 && x < CONFIG.GRID_W - 1 && y >= 2 && y < CONFIG.GRID_H - 1) {
+              if (y <= layer.getGroundY(x)) {
+                map.set((y << 8) | x, { x, y, part });
+              }
+            }
+          };
+
+          const buildFooting = (x, startY, part = P.BASE) => {
+            const gY = layer.getGroundY(x);
+            const lo = Math.min(startY, gY);
+            for (let y = lo; y <= gY; y++) {
+              put(x, y, y === lo ? part : P.PIER);
+            }
+          };
+
+          const buildPointedArch = (xL, xR, springY, apexRise, fillTracery) => {
+            const cX = (xL + xR) * 0.5;
+            const halfSpan = Math.max(1, (xR - xL) * 0.5);
+            for (let x = xL; x <= xR; x++) {
+              const norm = Math.abs(x - cX) / halfSpan;
+              const archY = Math.round(springY - (1.0 - Math.pow(norm, 1.35)) * apexRise);
+              put(x, archY, x === Math.round(cX) ? P.SPIRE : P.ARCH);
+              if (archY + 1 <= springY) {
+                put(x, archY + 1, P.ARCH);
+              }
+              if (fillTracery) {
+                for (let ty = archY + 2; ty <= springY; ty++) {
+                  if ((x - xL) % 2 === 0 || ty === springY || ty === archY + 3) {
+                    put(x, ty, P.TRACERY);
+                  }
+                }
+              }
+            }
+          };
+
+          if (style === "NAVE") {
+            const buttressSpan = Math.max(3, Math.min(4, Math.floor(w * 0.22)));
+            const naveL = left + buttressSpan;
+            const naveR = right - buttressSpan;
+            const naveW = Math.max(5, naveR - naveL + 1);
+            const gableH = Math.max(5, Math.min(9, Math.floor(naveW * 0.75)));
+            const springY = roofTop + gableH;
+
+            for (let x = left; x <= right; x++) {
+              put(x, groundY, P.BASE);
+              buildFooting(x, groundY, P.BASE);
+            }
+
+            for (let y = springY; y <= groundY; y++) {
+              put(naveL, y, P.PIER);
+              put(naveR, y, P.PIER);
+              if (naveW >= 7) {
+                put(naveL + 1, y, y === springY ? P.CAPITAL : P.COLUMN);
+                put(naveR - 1, y, y === springY ? P.CAPITAL : P.COLUMN);
+              }
+            }
+
+            for (let py = roofTop + 1; py < springY; py++) {
+              put(naveL, py, py === roofTop + 1 ? P.SPIRE : P.COLUMN);
+              put(naveR, py, py === roofTop + 1 ? P.SPIRE : P.COLUMN);
+            }
+
+            const halfNave = Math.max(1, (naveR - naveL) * 0.5);
+            for (let x = naveL; x <= naveR; x++) {
+              const dist = Math.abs(x - midX) / halfNave;
+              const gy = Math.round(roofTop + dist * (gableH - 1));
+              put(x, gy, P.GABLE);
+              put(x, Math.min(groundY, gy + 1), P.ARCH);
+              for (let ty = gy + 2; ty <= springY; ty++) {
+                put(x, ty, (x - naveL) % 2 === 0 || x === midX ? P.TRACERY : P.ARCH);
+              }
+            }
+            for (let sy = 1; sy <= 3; sy++) {
+              put(midX, roofTop - sy, P.SPIRE);
+            }
+
+            const portalY = groundY - Math.max(3, Math.floor((groundY - springY) * 0.38));
+            for (let x = naveL + 1; x <= naveR - 1; x++) {
+              put(x, springY, P.PARAPET);
+              put(x, portalY, P.PARAPET);
+            }
+
+            for (let y = springY + 1; y < portalY; y++) {
+              for (let x = naveL + 1; x <= naveR - 1; x++) {
+                const dx = Math.abs(x - midX);
+                const dy = y - (springY + 2);
+                const isMullion = (dx === 0 || dx % 2 === 0);
+                const isRoseHead = (y <= springY + 4 && (dx + Math.abs(dy - 1) <= 2));
+                if (isMullion || isRoseHead) {
+                  put(x, y, P.TRACERY);
+                }
+              }
+            }
+
+            buildPointedArch(naveL + 1, naveR - 1, portalY + 2, 2, false);
+            for (let y = portalY + 1; y < groundY; y++) {
+              put(naveL + 2, y, P.COLUMN);
+              put(naveR - 2, y, P.COLUMN);
+              if (Math.abs(midX - (naveL + 2)) > 2) {
+                put(midX, y, P.COLUMN);
+              }
+            }
+
+            for (let y = springY; y <= groundY; y++) {
+              put(left, y, y === springY ? P.SPIRE : (y === springY + 1 ? P.CAPITAL : P.PIER));
+              put(right, y, y === springY ? P.SPIRE : (y === springY + 1 ? P.CAPITAL : P.PIER));
+            }
+
+            const tier1Y = springY + 1;
+            const tier2Y = Math.min(groundY - 3, springY + 5);
+            for (const tY of [tier1Y, tier2Y]) {
+              for (let s = 1; s < buttressSpan; s++) {
+                const flyY = tY + Math.floor(s * 0.65);
+                put(naveL - s, flyY, P.FLYER);
+                put(naveL - s, flyY + 1, P.ARCH);
+                put(naveR + s, flyY, P.FLYER);
+                put(naveR + s, flyY + 1, P.ARCH);
+              }
+            }
+          } else if (style === "CLOISTER") {
+            const triforiumY = roofTop + Math.max(4, Math.floor(h * 0.36));
+            const baySpan = Math.max(5, Math.min(6, Math.floor(w / 3)));
+
+            for (let x = left; x <= right; x++) {
+              const localX = (x - left) % baySpan;
+              const isPier = (localX === 0) || (x === right);
+              if (isPier) {
+                put(x, roofTop - 3, P.SPIRE);
+                put(x, roofTop - 2, P.SPIRE);
+                put(x, roofTop - 1, P.CAPITAL);
+              } else if (localX === (baySpan >> 1)) {
+                put(x, roofTop - 1, P.SPIRE);
+              }
+              put(x, roofTop, P.PARAPET);
+              put(x, triforiumY, P.PARAPET);
+            }
+
+            const lancetSpan = 3;
+            for (let x = left; x <= right; x++) {
+              const lx = (x - left) % lancetSpan;
+              const isShaft = (lx === 0) || (x === right);
+              for (let y = roofTop + 1; y < triforiumY; y++) {
+                if (isShaft) {
+                  put(x, y, y === roofTop + 1 ? P.CAPITAL : P.COLUMN);
+                } else if (y === roofTop + 1) {
+                  put(x, y, P.SPIRE);
+                } else if (y === roofTop + 2) {
+                  put(x, y, P.ARCH);
+                } else {
+                  put(x, y, P.TRACERY);
+                }
+              }
+            }
+
+            for (let x = left; x <= right; x++) {
+              const lx = (x - left) % baySpan;
+              const isMainPier = (lx === 0) || (x === right);
+              const isClusterShaft = (lx === 1) || (lx === baySpan - 1);
+
+              for (let y = triforiumY + 1; y <= groundY; y++) {
+                if (isMainPier) {
+                  put(x, y, P.PIER);
+                } else if (isClusterShaft && y >= triforiumY + 2) {
+                  put(x, y, y === triforiumY + 2 ? P.CAPITAL : P.COLUMN);
+                } else {
+                  const distFromMid = Math.abs(lx - baySpan * 0.5);
+                  const vaultDepth = Math.round(distFromMid * 1.8);
+                  if (y <= triforiumY + 1 + vaultDepth) {
+                    put(x, y, distFromMid < 0.8 ? P.SPIRE : (y === triforiumY + 1 + vaultDepth ? P.ARCH : P.TRACERY));
+                  }
+                }
+              }
+              if (isMainPier || isClusterShaft) {
+                buildFooting(x, triforiumY + 2, P.PIER);
+              }
+            }
+          } else if (style === "BELFRY") {
+            const spireH = Math.max(6, Math.floor(h * 0.48));
+            const belfryTop = roofTop + spireH;
+            const towerHalfW = Math.max(3, Math.min(6, Math.floor(w * 0.36)));
+            const tL = midX - towerHalfW;
+            const tR = midX + towerHalfW;
+
+            put(midX, roofTop - 2, P.SPIRE);
+            put(midX, roofTop - 1, P.SPIRE);
+            for (let y = roofTop; y < belfryTop; y++) {
+              const prog = (y - roofTop) / Math.max(1, spireH - 1);
+              const span = Math.floor(prog * (towerHalfW - 1));
+              for (let x = midX - span; x <= midX + span; x++) {
+                const isEdge = (x === midX - span || x === midX + span);
+                if (isEdge) {
+                  put(x, y, (y % 2 === 0) ? P.SPIRE : P.GABLE);
+                } else {
+                  put(x, y, x === midX ? P.COLUMN : P.TRACERY);
+                }
+              }
+            }
+
+            for (let py = belfryTop - 3; py <= belfryTop; py++) {
+              put(tL, py, py < belfryTop - 1 ? P.SPIRE : P.PIER);
+              put(tR, py, py < belfryTop - 1 ? P.SPIRE : P.PIER);
+            }
+
+            for (let y = belfryTop; y <= groundY; y++) {
+              for (let x = tL; x <= tR; x++) {
+                const dx = Math.abs(x - midX);
+                if (y === belfryTop) {
+                  put(x, y, P.PARAPET);
+                } else if (y === groundY) {
+                  put(x, y, P.BASE);
+                } else if (x === tL || x === tR) {
+                  put(x, y, P.PIER);
+                } else if (dx === 0 || dx === towerHalfW - 1) {
+                  put(x, y, y === belfryTop + 1 ? P.CAPITAL : P.COLUMN);
+                } else if (y === belfryTop + 1 || y === belfryTop + 2 || (y - belfryTop) % 4 === 0) {
+                  put(x, y, P.ARCH);
+                } else {
+                  put(x, y, P.TRACERY);
+                }
+              }
+            }
+
+            const buttressTop = Math.floor((belfryTop + groundY) * 0.5);
+            if (tL - 2 >= 2 && tR + 2 < CONFIG.GRID_W - 2) {
+              for (let y = buttressTop + 1; y <= groundY; y++) {
+                put(tL - 2, y, y === buttressTop + 1 ? P.SPIRE : P.PIER);
+                put(tR + 2, y, y === buttressTop + 1 ? P.SPIRE : P.PIER);
+              }
+              for (let y = buttressTop + 2; y <= groundY; y++) {
+                if (y <= buttressTop + 4) {
+                  put(tL - 1, y, y === buttressTop + 2 ? P.FLYER : P.ARCH);
+                  put(tR + 1, y, y === buttressTop + 2 ? P.FLYER : P.ARCH);
+                }
+              }
+              buildFooting(tL - 2, groundY, P.PIER);
+              buildFooting(tR + 2, groundY, P.PIER);
+            }
+
+            for (let x = tL; x <= tR; x++) {
+              buildFooting(x, belfryTop + 2, P.BASE);
+            }
+          } else {
+            const towerW = Math.max(3, Math.floor(w * 0.24));
+            const spireH = Math.max(5, Math.floor(h * 0.38));
+            const naveTop = roofTop + spireH;
+
+            const towers = [
+              { tL: left + 1, tR: left + towerW, mid: left + 1 + (towerW >> 1) },
+              { tL: right - towerW, tR: right - 1, mid: right - (towerW >> 1) }
+            ];
+
+            for (const tw of towers) {
+              for (let sy = 1; sy <= 3; sy++) {
+                put(tw.mid, roofTop - sy, P.SPIRE);
+              }
+              for (let y = roofTop; y < naveTop; y++) {
+                const prog = (y - roofTop) / Math.max(1, spireH - 1);
+                const half = Math.floor(prog * (towerW * 0.5));
+                for (let x = tw.mid - half; x <= tw.mid + half; x++) {
+                  const isEdge = (x === tw.mid - half || x === tw.mid + half);
+                  put(x, y, isEdge ? ((y % 2 === 0) ? P.SPIRE : P.GABLE) : P.TRACERY);
+                }
+              }
+              put(tw.tL, naveTop - 2, P.SPIRE);
+              put(tw.tR, naveTop - 2, P.SPIRE);
+              put(tw.tL, naveTop - 1, P.CAPITAL);
+              put(tw.tR, naveTop - 1, P.CAPITAL);
+
+              for (let y = naveTop; y <= groundY; y++) {
+                for (let x = tw.tL; x <= tw.tR; x++) {
+                  if (y === naveTop) put(x, y, P.PARAPET);
+                  else if (x === tw.tL || x === tw.tR) put(x, y, P.PIER);
+                  else if (x === tw.mid) put(x, y, P.COLUMN);
+                  else if ((y - naveTop) % 3 === 0) put(x, y, P.ARCH);
+                  else put(x, y, P.TRACERY);
+                }
+              }
+            }
+
+            const flyStart = naveTop + 2;
+            for (let y = flyStart; y <= groundY; y++) {
+              put(left, y, y === flyStart ? P.SPIRE : P.PIER);
+              put(right, y, y === flyStart ? P.SPIRE : P.PIER);
+            }
+            put(left + 1, flyStart + 1, P.FLYER);
+            put(left + 1, flyStart + 2, P.ARCH);
+            put(right - 1, flyStart + 1, P.FLYER);
+            put(right - 1, flyStart + 2, P.ARCH);
+
+            const nL = left + towerW + 1;
+            const nR = right - towerW - 1;
+            const naveH = groundY - naveTop;
+            const deckY = naveTop + Math.max(4, Math.floor(naveH * 0.56));
+            const winCy = Math.floor((naveTop + deckY) * 0.5);
+            const winRad = Math.max(2, Math.min(4, Math.floor((nR - nL + 1) * 0.45)));
+
+            for (let sy = 1; sy <= 4; sy++) {
+              put(midX, naveTop - 2 - sy, P.SPIRE);
+            }
+
+            for (let x = nL; x <= nR; x++) {
+              const rise = Math.max(0, 3 - Math.abs(x - midX));
+              for (let gy = naveTop - rise; gy <= naveTop; gy++) {
+                put(x, gy, gy < naveTop ? P.GABLE : P.PARAPET);
+              }
+              put(x, deckY, P.PARAPET);
+              put(x, groundY, P.BASE);
+            }
+
+            for (let y = naveTop + 1; y < deckY; y++) {
+              for (let x = nL; x <= nR; x++) {
+                const dx = x - midX;
+                const dy = y - winCy;
+                const dist = Math.round(Math.sqrt(dx * dx + dy * dy));
+
+                const isEdge = (x === nL || x === nR);
+                const isCross = (dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy));
+                const isRing = (dist <= winRad);
+
+                if (isEdge) {
+                  put(x, y, P.COLUMN);
+                } else if (isCross || isRing) {
+                  put(x, y, P.TRACERY);
+                }
+              }
+            }
+
+            buildPointedArch(nL, nR, deckY + 3, 2, false);
+            for (let y = deckY + 1; y < groundY; y++) {
+              for (let x = nL; x <= nR; x++) {
+                const dx = Math.abs(x - midX);
+                if (x === nL || x === nR || dx <= 2) {
+                  put(x, y, y === deckY + 1 ? P.ARCH : (dx === 1 ? P.TRACERY : P.COLUMN));
+                }
+              }
+            }
+
+            for (let x = left; x <= right; x++) {
+              buildFooting(x, groundY, P.BASE);
+            }
+          }
+
+          return Array.from(map.values());
+        }
+      }
+
+      class DepthLayer {
+        constructor(id) {
+          this.id = id;
+          this.cells = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.flags = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.holdTimer = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.strength = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.ivy = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.nextIvy = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.spanDist = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.ghostPart = new Uint8Array(CONFIG.LAYER_BYTES);
+          this.groundY = new Uint8Array(CONFIG.GRID_W);
+        }
+
+        idx(x, y) {
+          return (y * CONFIG.GRID_W) + x;
+        }
+
+        inBounds(x, y) {
+          return x >= 0 && x < CONFIG.GRID_W && y >= 0 && y < CONFIG.GRID_H;
+        }
+
+        getState(i) {
+          return (this.cells[i] & CONFIG.MASK_STATE) >> CONFIG.SHIFT_STATE;
+        }
+
+        getPart(i) {
+          return (this.cells[i] & CONFIG.MASK_PART);
+        }
+
+        setCell(i, state, part) {
+          const p = Math.max(0, Math.min(CONFIG.MAX_PART, part | 0));
+          this.cells[i] = ((state << CONFIG.SHIFT_STATE) & CONFIG.MASK_STATE) | p;
+          if (state === CONFIG.STATE.POWERED) {
+            this.flags[i] |= CONFIG.FLAG_TRACE;
+            this.ghostPart[i] = p;
+          }
+        }
+
+        isStandingStone(st, part) {
+          if (st === CONFIG.STATE.POWERED || st === CONFIG.STATE.UNPOWERED) return true;
+          if (st === CONFIG.STATE.RUIN && part >= CONFIG.PART.BASE) return true;
+          return false;
+        }
+
+        isVerticalSupport(part) {
+          const P = CONFIG.PART;
+          return (
+            part === P.COLUMN ||
+            part === P.PIER ||
+            part === P.CAPITAL ||
+            part === P.BASE
+          );
+        }
+
+        getGroundY(x) {
+          const cx = Math.max(0, Math.min(CONFIG.GRID_W - 1, x | 0));
+          return this.groundY[cx];
+        }
+
+        initHill() {
+          const S = CONFIG.STATE;
+          const T = CONFIG.TREE_PART;
+          const W = CONFIG.GRID_W;
+          const H = CONFIG.GRID_H;
+
+          this.cells.fill(0);
+          this.flags.fill(0);
+          this.holdTimer.fill(0);
+          this.strength.fill(0);
+          this.ivy.fill(0);
+          this.nextIvy.fill(0);
+          this.ghostPart.fill(0);
+
+          for (let x = 0; x < W; x++) {
+            let gY = H - 14;
+            if (this.id === CONFIG.LAYER.FAR) {
+              gY = Math.floor(H - 42 + Math.sin(x * 0.042 + 0.4) * 6 + Math.cos(x * 0.095 - 0.5) * 3);
+            } else if (this.id === CONFIG.LAYER.MID) {
+              gY = Math.floor(H - 27 + Math.cos(x * 0.048 - 1.35) * 6.5 + Math.sin(x * 0.11) * 2.5);
+            } else {
+              gY = Math.floor(H - 13 + Math.sin(x * 0.044 + 2.1) * 5.5 + Math.cos(x * 0.085) * 2);
+            }
+
+            this.groundY[x] = gY;
+
+            for (let y = gY; y < H; y++) {
+              this.setCell(this.idx(x, y), S.SOIL, y === gY ? 15 : 8);
+            }
+
+            const treeStep = this.id === 0 ? 19 : (this.id === 1 ? 17 : 21);
+            if (x % treeStep === (this.id * 5 + 4) % treeStep && x > 8 && x < W - 10) {
+              if ((this.id === 0 && x > 6 && x < 74) || (this.id === 1 && x > 80 && x < 116)) {
+                continue;
+              }
+              const trunkH = (this.id === 0 ? 5 : 7) + (x % 3);
+              let curX = x;
+
+              for (let ty = 1; ty <= trunkH; ty++) {
+                if (gY - ty > 3) {
+                  if (ty === 3 && (x % 2 === 0)) curX += (x % 4 === 0 ? 1 : -1);
+                  if (ty === 5 && (x % 3 === 0)) curX += (x % 2 === 0 ? -1 : 1);
+                  if (this.inBounds(curX, gY - ty)) {
+                    this.setCell(this.idx(curX, gY - ty), S.PLANT, T.TRUNK);
+                  }
+                }
+              }
+
+              const topY = gY - trunkH;
+              for (const dir of [-1, 1]) {
+                const b1x = curX + dir;
+                const b1y = topY - 1;
+                if (this.inBounds(b1x, b1y)) {
+                  this.setCell(this.idx(b1x, b1y), S.PLANT, T.BOUGH);
+                }
+                const b2x = curX + dir * 2;
+                const b2y = topY - 2;
+                if (this.inBounds(b2x, b2y)) {
+                  this.setCell(this.idx(b2x, b2y), S.PLANT, T.TWIG);
+                }
+                if (this.id > 0 && this.inBounds(b2x, b2y - 1)) {
+                  this.setCell(this.idx(b2x, b2y - 1), S.PLANT, T.TWIG);
+                }
+              }
+            }
+          }
+        }
+
+        placeBuilding(planCells) {
+          const S = CONFIG.STATE;
+          if (!planCells || planCells.length === 0) return;
+
+          let minX = CONFIG.GRID_W, maxX = 0, minY = CONFIG.GRID_H, maxY = 0;
+          for (const c of planCells) {
+            if (c.x < minX) minX = c.x;
+            if (c.x > maxX) maxX = c.x;
+            if (c.y < minY) minY = c.y;
+            if (c.y > maxY) maxY = c.y;
+          }
+
+          for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+              const i = this.idx(x, y);
+              if (this.getState(i) === S.PLANT) {
+                this.setCell(i, S.EMPTY, 0);
+              }
+            }
+          }
+
+          const keepGoal = Math.max(2, Math.round(planCells.length * CONFIG.KEEP_RATIO));
+          const anchor1 = Math.round(minX + (maxX - minX) * 0.28);
+          const anchor2 = Math.round(minX + (maxX - minX) * 0.72);
+
+          const sortedBase = [...planCells].sort((a, b) => {
+            const da = Math.min(Math.abs(a.x - anchor1), Math.abs(a.x - anchor2)) + Math.max(0, (this.getGroundY(a.x) - a.y) * 2);
+            const db = Math.min(Math.abs(b.x - anchor1), Math.abs(b.x - anchor2)) + Math.max(0, (this.getGroundY(b.x) - b.y) * 2);
+            return da - db;
+          });
+
+          const keepSet = new Set();
+          for (const c of sortedBase) {
+            const gY = this.getGroundY(c.x);
+            if (c.y <= gY && c.y >= gY - 3 && keepSet.size < keepGoal) {
+              keepSet.add((c.y << 8) | c.x);
+            }
+          }
+
+          for (const c of planCells) {
+            const i = this.idx(c.x, c.y);
+            const oldState = this.getState(i);
+            if (oldState === S.SOIL) continue;
+
+            const wasHauntedAddress = (this.flags[i] & CONFIG.FLAG_TRACE) !== 0;
+            if (wasHauntedAddress) {
+              this.flags[i] |= CONFIG.FLAG_HAUNTED;
+            } else {
+              this.flags[i] &= ~CONFIG.FLAG_KEEP;
+            }
+
+            if (keepSet.has((c.y << 8) | c.x)) {
+              this.flags[i] |= CONFIG.FLAG_KEEP;
+            }
+
+            this.setCell(i, S.POWERED, c.part);
+            this.flags[i] |= CONFIG.FLAG_GROUNDED;
+            this.holdTimer[i] = wasHauntedAddress ? (CONFIG.HOLD_TICKS >> 1) : CONFIG.HOLD_TICKS;
+            this.strength[i] = wasHauntedAddress ? CONFIG.HAUNTED_STRENGTH : CONFIG.MAX_STRENGTH;
+            this.ivy[i] = 0;
+          }
+        }
+      }
+
+      class World {
+        constructor() {
+          this.layers = [
+            new DepthLayer(CONFIG.LAYER.FAR),
+            new DepthLayer(CONFIG.LAYER.MID),
+            new DepthLayer(CONFIG.LAYER.NEAR)
+          ];
+          this.tickCount = 0;
+          this.rasRow = CONFIG.GRID_H - 1;
+          this.rasChargeRemaining = CONFIG.RAS_MAX_BYTES_PER_SCAN;
+          this.rasCutoffRow = 0;
+          this.ashFlakes = [];
+          this.init();
+        }
+
+        spawnAshFlake(x, y, layerId) {
+          const AF = CONFIG.ASH_FLAKES;
+          for (let n = 0; n < AF.SPAWN_BURST; n++) {
+            if (this.ashFlakes.length >= AF.MAX_COUNT) return;
+            this.ashFlakes.push({
+              x: x + (Math.random() - 0.5) * 1.1,
+              y: y + (Math.random() - 0.5) * 0.9,
+              vx: (Math.random() - 0.5) * AF.HORIZONTAL_SPREAD,
+              vy: -(AF.MIN_RISE_SPEED + Math.random() * (AF.MAX_RISE_SPEED - AF.MIN_RISE_SPEED)),
+              sizePx: AF.MIN_SIZE_PX + Math.random() * (AF.MAX_SIZE_PX - AF.MIN_SIZE_PX),
+              aspect: AF.MIN_ASPECT + Math.random() * (AF.MAX_ASPECT - AF.MIN_ASPECT),
+              phase: Math.random() * Math.PI * 2,
+              life: 1.0,
+              decay: AF.MIN_DECAY + Math.random() * (AF.MAX_DECAY - AF.MIN_DECAY),
+              layerId
+            });
+          }
+        }
+
+        init() {
+          for (const l of this.layers) {
+            l.initHill();
+          }
+
+          const planFarCloister = Builder.makePlan(9, 44, 41, 58, this.layers[CONFIG.LAYER.FAR]);
+          this.layers[CONFIG.LAYER.FAR].placeBuilding(planFarCloister);
+
+          const ghostPlan = Builder.makePlan(55, 15, 67, 48, this.layers[CONFIG.LAYER.FAR]);
+          this.layers[CONFIG.LAYER.FAR].placeBuilding(ghostPlan);
+          for (const c of ghostPlan) {
+            const gi = this.layers[CONFIG.LAYER.FAR].idx(c.x, c.y);
+            if (!(this.layers[CONFIG.LAYER.FAR].flags[gi] & CONFIG.FLAG_KEEP)) {
+              this.layers[CONFIG.LAYER.FAR].setCell(gi, CONFIG.STATE.EMPTY, 0);
+            } else {
+              this.layers[CONFIG.LAYER.FAR].setCell(gi, CONFIG.STATE.RUIN, c.part);
+              this.layers[CONFIG.LAYER.FAR].ivy[gi] = 88;
+            }
+          }
+
+          const planMidCathedral = Builder.makePlan(83, 35, 111, 64, this.layers[CONFIG.LAYER.MID]);
+          this.layers[CONFIG.LAYER.MID].placeBuilding(planMidCathedral);
+        }
+
+        pickNearestLayer(x0, y0, x1, y1) {
+          const midX = Math.max(0, Math.min(CONFIG.GRID_W - 1, Math.floor((x0 + x1) * 0.5)));
+          const baseY = Math.max(y0, y1);
+
+          let best = this.layers[CONFIG.LAYER.NEAR];
+          let minDist = 9999;
+
+          for (const l of this.layers) {
+            const gY = l.getGroundY(midX);
+            const dist = Math.abs(baseY - gY);
+            if (dist < minDist) {
+              minDist = dist;
+              best = l;
+            }
+          }
+          return best;
+        }
+
+        step(now) {
+          const S = CONFIG.STATE;
+          const P = CONFIG.PART;
+          const AF = CONFIG.ASH_FLAKES;
+          const W = CONFIG.GRID_W;
+          const H = CONFIG.GRID_H;
+          this.tickCount++;
+
+          for (let e = this.ashFlakes.length - 1; e >= 0; e--) {
+            const fl = this.ashFlakes[e];
+            fl.x += fl.vx + Math.sin(now * AF.SWAY_FREQUENCY + fl.phase) * AF.SWAY_AMPLITUDE;
+            fl.y += fl.vy;
+            fl.life -= fl.decay;
+            if (fl.life <= 0) {
+              this.ashFlakes.splice(e, 1);
+            }
+          }
+
+          for (let rStep = 0; rStep < CONFIG.RAS_SWEEP_ROWS_PER_FRAME; rStep++) {
+            this.rasRow--;
+            if (this.rasRow < 2) {
+              this.rasRow = H - 1;
+              this.rasChargeRemaining = CONFIG.RAS_MAX_BYTES_PER_SCAN;
+              this.rasCutoffRow = 2;
+            }
+
+            for (const l of this.layers) {
+              for (let x = 0; x < W; x++) {
+                const i = l.idx(x, this.rasRow);
+                const st = l.getState(i);
+                if (st === S.POWERED) {
+                  if (this.rasChargeRemaining > 0) {
+                    l.flags[i] |= CONFIG.FLAG_POWERED;
+                    this.rasChargeRemaining--;
+                  } else {
+                    l.flags[i] &= ~CONFIG.FLAG_POWERED;
+                    if (this.rasRow > this.rasCutoffRow) {
+                      this.rasCutoffRow = this.rasRow;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          for (const l of this.layers) {
+            const divider = CONFIG.LAYER_DIVIDER[l.id];
+            if (this.tickCount % divider !== 0) continue;
+
+            l.spanDist.fill(255);
+            for (let i = 0; i < CONFIG.LAYER_BYTES; i++) {
+              l.flags[i] &= ~CONFIG.FLAG_GROUNDED;
+              if (l.holdTimer[i] > 0) l.holdTimer[i]--;
+            }
+
+            for (let y = H - 1; y >= 0; y--) {
+              for (let x = 0; x < W; x++) {
+                const i = l.idx(x, y);
+                const st = l.getState(i);
+                const part = l.getPart(i);
+
+                if (y >= H - 1 || st === S.SOIL) {
+                  l.flags[i] |= CONFIG.FLAG_GROUNDED;
+                  l.spanDist[i] = 0;
+                  continue;
+                }
+
+                if (l.isStandingStone(st, part)) {
+                  const below = l.idx(x, y + 1);
+                  const belowL = x > 0 ? l.idx(x - 1, y + 1) : below;
+                  const belowR = x < W - 1 ? l.idx(x + 1, y + 1) : below;
+
+                  if ((l.flags[below] & CONFIG.FLAG_GROUNDED) && l.spanDist[below] <= CONFIG.MAX_SPAN) {
+                    l.flags[i] |= CONFIG.FLAG_GROUNDED;
+                    l.spanDist[i] = l.isVerticalSupport(part) ? 0 : l.spanDist[below];
+                  } else if (
+                    ((l.flags[belowL] & CONFIG.FLAG_GROUNDED) && l.spanDist[belowL] < CONFIG.MAX_SPAN) ||
+                    ((l.flags[belowR] & CONFIG.FLAG_GROUNDED) && l.spanDist[belowR] < CONFIG.MAX_SPAN)
+                  ) {
+                    const bestDiag = Math.min(l.spanDist[belowL], l.spanDist[belowR]);
+                    l.flags[i] |= CONFIG.FLAG_GROUNDED;
+                    l.spanDist[i] = bestDiag + 1;
+                  }
+                }
+              }
+
+              for (let x = 1; x < W; x++) {
+                const i = l.idx(x, y);
+                if (!l.isStandingStone(l.getState(i), l.getPart(i))) continue;
+                const left = l.idx(x - 1, y);
+                if ((l.flags[left] & CONFIG.FLAG_GROUNDED) && l.spanDist[left] + 1 <= CONFIG.MAX_SPAN) {
+                  if (l.spanDist[left] + 1 < l.spanDist[i]) {
+                    l.spanDist[i] = l.spanDist[left] + 1;
+                    l.flags[i] |= CONFIG.FLAG_GROUNDED;
+                  }
+                }
+              }
+
+              for (let x = W - 2; x >= 0; x--) {
+                const i = l.idx(x, y);
+                if (!l.isStandingStone(l.getState(i), l.getPart(i))) continue;
+                const right = l.idx(x + 1, y);
+                if ((l.flags[right] & CONFIG.FLAG_GROUNDED) && l.spanDist[right] + 1 <= CONFIG.MAX_SPAN) {
+                  if (l.spanDist[right] + 1 < l.spanDist[i]) {
+                    l.spanDist[i] = l.spanDist[right] + 1;
+                    l.flags[i] |= CONFIG.FLAG_GROUNDED;
+                  }
+                }
+              }
+
+              for (let x = 0; x < W; x++) {
+                const i = l.idx(x, y);
+                const st = l.getState(i);
+                if (st === S.PLANT && y < H - 1) {
+                  const below = l.idx(x, y + 1);
+                  const belowL = x > 0 ? l.idx(x - 1, y + 1) : below;
+                  const belowR = x < W - 1 ? l.idx(x + 1, y + 1) : below;
+                  if (
+                    (l.flags[below] & CONFIG.FLAG_GROUNDED) ||
+                    (l.flags[belowL] & CONFIG.FLAG_GROUNDED) ||
+                    (l.flags[belowR] & CONFIG.FLAG_GROUNDED)
+                  ) {
+                    l.flags[i] |= CONFIG.FLAG_GROUNDED;
+                  }
+                }
+              }
+            }
+
+            l.nextIvy.set(l.ivy);
+
+            for (let y = H - 2; y >= 1; y--) {
+              for (let x = 1; x < W - 1; x++) {
+                const i = l.idx(x, y);
+                const st = l.getState(i);
+                const part = l.getPart(i);
+
+                if (!l.isStandingStone(st, part) || !(l.flags[i] & CONFIG.FLAG_GROUNDED)) {
+                  l.nextIvy[i] = 0;
+                  continue;
+                }
+
+                const curIvy = l.ivy[i];
+                const belowIdx = l.idx(x, y + 1);
+                const belowSt = l.getState(belowIdx);
+                const isHaunted = (l.flags[i] & CONFIG.FLAG_HAUNTED) !== 0;
+
+                if (curIvy === 0) {
+                  if (st === S.POWERED && l.holdTimer[i] > 0) continue;
+
+                  if (belowSt === S.SOIL) {
+                    if (Math.random() < CONFIG.IVY_START_PROB) {
+                      l.nextIvy[i] = CONFIG.IVY_START_VAL;
+                      if (st === S.POWERED) l.setCell(i, S.UNPOWERED, part);
+                    }
+                  } else {
+                    const belowL = l.idx(x - 1, y + 1);
+                    const belowR = l.idx(x + 1, y + 1);
+                    const left = l.idx(x - 1, y);
+                    const right = l.idx(x + 1, y);
+
+                    const readyBelow =
+                      l.ivy[belowIdx] >= CONFIG.IVY_CLIMB_READY ||
+                      l.ivy[belowL] >= CONFIG.IVY_CLIMB_READY ||
+                      l.ivy[belowR] >= CONFIG.IVY_CLIMB_READY;
+
+                    const readySide =
+                      l.ivy[left] >= CONFIG.IVY_SIDE_READY ||
+                      l.ivy[right] >= CONFIG.IVY_SIDE_READY;
+
+                    const climbProb = isHaunted ? CONFIG.IVY_CLIMB_PROB * 1.45 : CONFIG.IVY_CLIMB_PROB;
+                    if ((readyBelow || readySide) && Math.random() < climbProb) {
+                      l.nextIvy[i] = 2;
+                      if (st === S.POWERED) l.setCell(i, S.UNPOWERED, part);
+                    }
+                  }
+                } else if (curIvy < 100) {
+                  const stepInc = isHaunted ? CONFIG.IVY_GROW_STEP + 1 : CONFIG.IVY_GROW_STEP;
+                  l.nextIvy[i] = Math.min(100, curIvy + stepInc);
+                }
+              }
+            }
+            l.ivy.set(l.nextIvy);
+
+            for (let y = 1; y <= H - 2; y++) {
+              for (let x = 1; x < W - 1; x++) {
+                const i = l.idx(x, y);
+                const st = l.getState(i);
+                const part = l.getPart(i);
+
+                if (st === S.EMPTY || st === S.SOIL) continue;
+
+                const belowIdx = l.idx(x, y + 1);
+                const belowSt = l.getState(belowIdx);
+                const isGrounded = (l.flags[i] & CONFIG.FLAG_GROUNDED) !== 0;
+                const isKept = (l.flags[i] & CONFIG.FLAG_KEEP) !== 0;
+
+                if (st === S.PLANT) {
+                  if (!isGrounded) {
+                    if (belowSt === S.EMPTY) l.setCell(belowIdx, S.PLANT, part);
+                    l.setCell(i, S.EMPTY, 0);
+                  }
+                  continue;
+                }
+
+                if (l.isStandingStone(st, part) && !isGrounded && l.holdTimer[i] === 0) {
+                  l.ivy[i] = 0;
+                  this.spawnAshFlake(x, y, l.id);
+                  if (belowSt === S.EMPTY || belowSt === S.PLANT) {
+                    l.setCell(belowIdx, S.RUIN, P.RUBBLE);
+                    l.setCell(i, S.EMPTY, 0);
+                  } else {
+                    l.setCell(i, S.RUIN, P.RUBBLE);
+                  }
+                  continue;
+                }
+
+                if (st === S.POWERED) {
+                  const touchesGroundOrUnpowered =
+                    belowSt === S.SOIL ||
+                    belowSt === S.UNPOWERED ||
+                    l.ivy[belowIdx] > 0;
+
+                  if (l.holdTimer[i] === 0) {
+                    if (!(l.flags[i] & CONFIG.FLAG_POWERED) && Math.random() < CONFIG.COOL_RATE) {
+                      l.setCell(i, S.UNPOWERED, part);
+                      continue;
+                    }
+                    if (touchesGroundOrUnpowered && Math.random() < CONFIG.AGE_RATE) {
+                      l.setCell(i, S.UNPOWERED, part);
+                      continue;
+                    }
+                  }
+                } else if (st === S.UNPOWERED || (st === S.RUIN && part >= P.BASE)) {
+                  const aboveIdx = l.idx(x, y - 1);
+                  const aboveLIdx = l.idx(x - 1, y - 1);
+                  const aboveRIdx = l.idx(x + 1, y - 1);
+
+                  const directlySupportingAbove = l.isStandingStone(l.getState(aboveIdx), l.getPart(aboveIdx));
+                  const diagSupportingLeft =
+                    l.isStandingStone(l.getState(aboveLIdx), l.getPart(aboveLIdx)) &&
+                    !l.isStandingStone(l.getState(l.idx(x - 1, y)), l.getPart(l.idx(x - 1, y)));
+                  const diagSupportingRight =
+                    l.isStandingStone(l.getState(aboveRIdx), l.getPart(aboveRIdx)) &&
+                    !l.isStandingStone(l.getState(l.idx(x + 1, y)), l.getPart(l.idx(x + 1, y)));
+
+                  const isSupportingUpperMasonry = directlySupportingAbove || diagSupportingLeft || diagSupportingRight;
+                  const isTopExposed = !directlySupportingAbove;
+
+                  const hasBriars = l.ivy[i] >= CONFIG.IVY_WEAKEN_START;
+                  const topWeathering = isTopExposed && Math.random() < CONFIG.TOP_EXPOSED_WEAKEN_PROB;
+
+                  if (hasBriars || topWeathering) {
+                    const isFragile = (part === P.SPIRE || part === P.GABLE || part === P.TRACERY || part === P.FLYER);
+                    const drop = isFragile ? 2 : 1;
+
+                    if (l.strength[i] > 0 && Math.random() < CONFIG.WEAKEN_PROB) {
+                      const minStr = isKept ? 25 : 0;
+                      l.strength[i] = Math.max(minStr, l.strength[i] - drop);
+                    }
+
+                    if (st === S.UNPOWERED && l.strength[i] < 75) {
+                      l.setCell(i, S.RUIN, part);
+                    }
+                  }
+
+                  if (!isKept && l.strength[i] === 0 && !isSupportingUpperMasonry) {
+                    if (Math.random() < CONFIG.ERODE_TOP_PROB) {
+                      l.setCell(i, S.RUIN, P.RUBBLE);
+                      l.ivy[i] = 0;
+                      this.spawnAshFlake(x, y, l.id);
+                    }
+                  }
+                }
+              }
+            }
+
+            for (let y = H - 2; y >= 1; y--) {
+              for (let x = 1; x < W - 1; x++) {
+                const i = l.idx(x, y);
+                if (l.getState(i) !== S.RUIN || l.getPart(i) >= P.BASE) continue;
+
+                const belowIdx = l.idx(x, y + 1);
+                const belowSt = l.getState(belowIdx);
+                const gY = l.getGroundY(x);
+
+                if (belowSt === S.EMPTY || belowSt === S.PLANT) {
+                  l.setCell(belowIdx, S.RUIN, P.RUBBLE);
+                  l.ivy[belowIdx] = 0;
+                  l.setCell(i, S.EMPTY, 0);
+                  l.ivy[i] = 0;
+                  continue;
+                }
+
+                if (y < gY - 1) {
+                  const dir = ((x + y + (now | 0)) & 1) === 0 ? -1 : 1;
+                  const d1 = x + dir;
+                  const d2 = x - dir;
+
+                  const open1 =
+                    l.inBounds(d1, y + 1) &&
+                    (l.getState(l.idx(d1, y + 1)) === S.EMPTY || l.getState(l.idx(d1, y + 1)) === S.PLANT);
+
+                  const open2 =
+                    l.inBounds(d2, y + 1) &&
+                    (l.getState(l.idx(d2, y + 1)) === S.EMPTY || l.getState(l.idx(d2, y + 1)) === S.PLANT);
+
+                  if (open1 || open2) {
+                    const tx = open1 ? d1 : d2;
+                    const tIdx = l.idx(tx, y + 1);
+                    l.setCell(tIdx, S.RUIN, P.RUBBLE);
+                    l.ivy[tIdx] = 0;
+                    l.setCell(i, S.EMPTY, 0);
+                    l.ivy[i] = 0;
+                    continue;
+                  }
+                }
+
+                if (Math.random() < CONFIG.RUBBLE_CLEAR_PROB) {
+                  l.setCell(i, S.EMPTY, 0);
+                  l.ivy[i] = 0;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      class Renderer {
+        constructor(canvas) {
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d");
+          this.cellPx = 8;
+          this.offsetX = 0;
+          this.offsetY = 0;
+          this.resize();
+        }
+
+        resize() {
+          this.canvas.width = window.innerWidth;
+          this.canvas.height = window.innerHeight;
+          this.cellPx = Math.max(
+            4,
+            Math.floor(Math.min(this.canvas.width / CONFIG.GRID_W, this.canvas.height / CONFIG.GRID_H))
+          );
+          this.offsetX = Math.floor((this.canvas.width - CONFIG.GRID_W * this.cellPx) * 0.5);
+          this.offsetY = Math.floor((this.canvas.height - CONFIG.GRID_H * this.cellPx) * 0.5);
+        }
+
+        screenToGrid(sx, sy) {
+          const gx = Math.floor((sx - this.offsetX) / this.cellPx);
+          const gy = Math.floor((sy - this.offsetY) / this.cellPx);
+          return { gx, gy };
+        }
+
+        drawSkyAndOpalescentMoon(ctx, now) {
+          const C = CONFIG.COLORS;
+          const W = CONFIG.GRID_W;
+          const H = CONFIG.GRID_H;
+          const cp = this.cellPx;
+          const gW = W * cp;
+          const gH = H * cp;
+
+          ctx.fillStyle = "#050206";
+          ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+          const grad = ctx.createLinearGradient(0, this.offsetY, 0, this.offsetY + gH);
+          grad.addColorStop(0.0, `rgb(${C.SKY_TOP[0]},${C.SKY_TOP[1]},${C.SKY_TOP[2]})`);
+          grad.addColorStop(0.32, `rgb(${C.SKY_UPPER[0]},${C.SKY_UPPER[1]},${C.SKY_UPPER[2]})`);
+          grad.addColorStop(0.62, `rgb(${C.SKY_MID[0]},${C.SKY_MID[1]},${C.SKY_MID[2]})`);
+          grad.addColorStop(0.84, `rgb(${C.SKY_LOW[0]},${C.SKY_LOW[1]},${C.SKY_LOW[2]})`);
+          grad.addColorStop(1.0, `rgb(${C.SKY_HORIZON[0]},${C.SKY_HORIZON[1]},${C.SKY_HORIZON[2]})`);
+          ctx.fillStyle = grad;
+          ctx.fillRect(this.offsetX, this.offsetY, gW, gH);
+
+          for (let s = 0; s < 36; s++) {
+            const sx = this.offsetX + ((s * 97 + 13) % W) * cp;
+            const sy = this.offsetY + ((s * 43 + 7) % 34) * cp;
+            const twinkle = 0.15 + 0.25 * Math.pow(0.5 + 0.5 * Math.sin(now * 0.002 + s * 2.1), 2);
+            ctx.fillStyle = s % 4 === 0 ? `rgba(248, 212, 140, ${twinkle.toFixed(2)})` : `rgba(244, 232, 224, ${twinkle.toFixed(2)})`;
+            ctx.fillRect(sx, sy, 1, 1);
+          }
+
+          const moonX = this.offsetX + 25 * cp;
+          const moonY = this.offsetY + 17 * cp;
+          const moonR = 4.6 * cp;
+
+          const outerHalo = ctx.createRadialGradient(moonX, moonY, moonR * 0.4, moonX, moonY, moonR * 5.2);
+          outerHalo.addColorStop(0.0, "rgba(246, 214, 142, 0.28)");
+          outerHalo.addColorStop(0.28, "rgba(198, 112, 88, 0.12)");
+          outerHalo.addColorStop(0.62, "rgba(112, 24, 46, 0.05)");
+          outerHalo.addColorStop(1.0, "rgba(16, 5, 16, 0.0)");
+          ctx.fillStyle = outerHalo;
+          ctx.fillRect(this.offsetX, this.offsetY, gW, gH);
+
+          const discGrad = ctx.createRadialGradient(
+            moonX - moonR * 0.18, moonY - moonR * 0.18, moonR * 0.08,
+            moonX, moonY, moonR
+          );
+          discGrad.addColorStop(0.0, "rgba(255, 250, 236, 0.95)");
+          discGrad.addColorStop(0.68, "rgba(244, 222, 176, 0.86)");
+          discGrad.addColorStop(0.93, "rgba(218, 174, 118, 0.58)");
+          discGrad.addColorStop(1.0, "rgba(218, 174, 118, 0.0)");
+          ctx.fillStyle = discGrad;
+          ctx.beginPath();
+          ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+          ctx.fill();
+
+          for (let x = 0; x < W; x++) {
+            const mY = Math.floor(H - 58 + Math.sin(x * 0.038 + 1.1) * 9 + Math.cos(x * 0.11) * 4.5);
+            const px = this.offsetX + x * cp;
+            const py = this.offsetY + mY * cp;
+            ctx.fillStyle = `rgb(${C.FAR_CRAGS[0]},${C.FAR_CRAGS[1]},${C.FAR_CRAGS[2]})`;
+            ctx.fillRect(px, py, cp, (H - mY) * cp);
+            ctx.fillStyle = `rgb(${C.FAR_CRAGS_RIM[0]},${C.FAR_CRAGS_RIM[1]},${C.FAR_CRAGS_RIM[2]})`;
+            ctx.fillRect(px, py, cp, 1);
+          }
+        }
+
+        drawGhostPart(ctx, px, py, cp, part, pal, isRasRow, x, y, now) {
+          const P = CONFIG.PART;
+          const G = CONFIG.GHOST;
+          const half = cp >> 1;
+
+          const tickFast = (now * 0.06) | 0;
+          const cellHash = (x * 37 + y * 13 + tickFast * 19) & 31;
+
+          if (!isRasRow && cellHash === 0) return;
+
+          const rowBuzz = Math.sin(now * G.BUZZ_SPEED + y * 1.3) * Math.cos(now * (G.BUZZ_SPEED * 1.75) - y * 0.7);
+          let jitterX = 0;
+          if (rowBuzz > G.JITTER_HIGH_THRESH) {
+            jitterX = ((tickFast + y) & 1) === 0 ? G.JITTER_MAX_PX : -G.JITTER_MAX_PX;
+          } else if (rowBuzz < G.JITTER_LOW_THRESH) {
+            jitterX = G.JITTER_MIN_PX;
+          }
+
+          const gx = px + jitterX;
+          const surge = isRasRow || cellHash === 1 || rowBuzz > 0.80;
+
+          const baseAlpha = surge
+            ? G.SURGE_ALPHA
+            : (G.BASE_ALPHA + G.PULSE_AMPLITUDE * Math.abs(Math.sin(now * G.PULSE_SPEED + x * 0.25 + y * 0.19)));
+
+          const goldStr = `rgba(${pal.ghostGold[0]},${pal.ghostGold[1]},${pal.ghostGold[2]},${baseAlpha.toFixed(3)})`;
+          const ivoryStr = `rgba(${pal.ghostIvory[0]},${pal.ghostIvory[1]},${pal.ghostIvory[2]},${Math.min(1, baseAlpha + G.IVORY_BOOST).toFixed(3)})`;
+          const crimStr = `rgba(${pal.ghostCrimson[0]},${pal.ghostCrimson[1]},${pal.ghostCrimson[2]},${(baseAlpha * G.CRIMSON_SCALE).toFixed(3)})`;
+
+          if (Math.abs(jitterX) > 0) {
+            ctx.fillStyle = crimStr;
+            ctx.fillRect(px - jitterX + half, py, 1, cp);
+          }
+
+          if (part === P.SPIRE) {
+            ctx.fillStyle = surge ? ivoryStr : goldStr;
+            ctx.fillRect(gx + half - 1, py, 2, cp);
+            if ((y & 1) === 0) {
+              ctx.fillStyle = crimStr;
+              ctx.fillRect(gx + 1, py + half, cp - 2, 1);
+            }
+          } else if (part === P.GABLE || part === P.ARCH) {
+            ctx.fillStyle = ivoryStr;
+            ctx.fillRect(gx + 1, py, Math.max(2, cp - 2), 1);
+            ctx.fillStyle = goldStr;
+            ctx.fillRect(gx + half, py, 1, cp);
+          } else if (part === P.FLYER) {
+            ctx.fillStyle = goldStr;
+            ctx.fillRect(gx, py + half, half + 1, 1);
+            ctx.fillStyle = ivoryStr;
+            ctx.fillRect(gx + half, py, half, 1);
+          } else if (part === P.TRACERY) {
+            ctx.fillStyle = goldStr;
+            ctx.fillRect(gx + half, py, 1, cp);
+            if ((x + y) % 2 === 0) {
+              ctx.fillStyle = surge ? ivoryStr : crimStr;
+              ctx.fillRect(gx, py + half, cp, 1);
+            }
+          } else if (part === P.PARAPET) {
+            ctx.fillStyle = ivoryStr;
+            ctx.fillRect(gx, py, cp, 1);
+            ctx.fillStyle = goldStr;
+            ctx.fillRect(gx + half, py + 1, 1, Math.max(1, cp - 2));
+          } else if (part === P.COLUMN || part === P.CAPITAL) {
+            ctx.fillStyle = goldStr;
+            ctx.fillRect(gx + 1, py, 1, cp);
+            ctx.fillRect(gx + cp - 2, py, 1, cp);
+            if (part === P.CAPITAL) {
+              ctx.fillStyle = ivoryStr;
+              ctx.fillRect(gx, py, cp, 1);
+            }
+          } else if (part === P.PIER || part === P.BASE) {
+            ctx.fillStyle = goldStr;
+            ctx.fillRect(gx, py, 1, cp);
+            ctx.fillRect(gx + cp - 1, py, 1, cp);
+            if ((y % 2) === 0) {
+              ctx.fillStyle = crimStr;
+              ctx.fillRect(gx + 1, py, cp - 2, 1);
+            }
+          }
+        }
+
+        drawStonePart(ctx, px, py, cp, part, mainRGB, shadowRGB, trimRGB, crackRGB, isCracked, isRasRow, x, y) {
+          const P = CONFIG.PART;
+          const boost = isRasRow ? 28 : 0;
+          const mStr = `rgb(${Math.min(255, mainRGB[0] + boost)},${Math.min(255, mainRGB[1] + boost)},${Math.min(255, mainRGB[2] + boost)})`;
+          const sStr = `rgb(${shadowRGB[0]},${shadowRGB[1]},${shadowRGB[2]})`;
+          const tStr = `rgb(${Math.min(255, trimRGB[0] + boost)},${Math.min(255, trimRGB[1] + boost)},${Math.min(255, trimRGB[2] + boost)})`;
+          const half = cp >> 1;
+
+          if (part === P.SPIRE) {
+            ctx.fillStyle = tStr;
+            ctx.fillRect(px + half - 1, py, 2, cp);
+            if ((y & 1) === 0) {
+              ctx.fillStyle = mStr;
+              ctx.fillRect(px + 1, py + half, cp - 2, 1);
+            }
+          } else if (part === P.GABLE) {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px + 1, py + 1, Math.max(2, cp - 2), Math.max(2, cp - 1));
+            ctx.fillStyle = tStr;
+            ctx.fillRect(px + half - 1, py, 2, cp);
+            ctx.fillRect(px, py + half, cp, 1);
+          } else if (part === P.FLYER) {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px, py + half, half + 1, Math.max(2, half));
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px + half - 1, py, half + 1, Math.max(2, half));
+          } else if (part === P.ARCH) {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px, py + 1, cp, Math.max(2, cp - 2));
+            ctx.fillStyle = tStr;
+            ctx.fillRect(px + 1, py, Math.max(2, cp - 2), 2);
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px + half - 1, py, 2, cp);
+          } else if (part === P.TRACERY) {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px + half - 1, py, 2, cp);
+            if ((x + y) % 2 === 0) {
+              ctx.fillStyle = tStr;
+              ctx.fillRect(px, py + half - 1, cp, 1);
+              ctx.fillRect(px + 1, py + 1, 1, 1);
+              ctx.fillRect(px + cp - 2, py + cp - 2, 1, 1);
+            }
+          } else if (part === P.PARAPET) {
+            ctx.fillStyle = tStr;
+            ctx.fillRect(px, py, cp, 1);
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px, py + 1, cp, Math.max(1, cp - 3));
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px + 1, py + cp - 2, 2, 2);
+          } else if (part === P.COLUMN) {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px + 1, py, Math.max(2, cp - 2), cp);
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px + 1, py, 1, cp);
+            ctx.fillRect(px + cp - 2, py, 1, cp);
+            ctx.fillStyle = tStr;
+            ctx.fillRect(px + half, py, 1, cp);
+          } else if (part === P.CAPITAL) {
+            ctx.fillStyle = tStr;
+            ctx.fillRect(px, py, cp, 2);
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px + 1, py + 2, Math.max(2, cp - 2), Math.max(1, cp - 2));
+          } else if (part === P.PIER || part === P.BASE) {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px, py, cp, cp);
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px + 1, py, Math.max(2, cp - 2), Math.max(2, cp - 1));
+            if ((y % 3) === 0) {
+              ctx.fillStyle = tStr;
+              ctx.fillRect(px, py, cp, 1);
+            }
+          } else {
+            ctx.fillStyle = sStr;
+            ctx.fillRect(px + 1, py + half - 1, Math.max(2, cp - 2), Math.max(2, half));
+            ctx.fillStyle = mStr;
+            ctx.fillRect(px + 2, py + half, Math.max(1, cp - 4), 1);
+          }
+
+          if (isCracked) {
+            ctx.fillStyle = `rgb(${crackRGB[0]},${crackRGB[1]},${crackRGB[2]})`;
+            ctx.fillRect(px + half, py + 1, 1, Math.max(2, cp - 2));
+            ctx.fillRect(px + cp - 2, py, 2, 2);
+          }
+        }
+
+        drawBriars(ctx, px, py, cp, ivyLevel, pal, x, y) {
+          if (ivyLevel <= 0) return;
+          const stemCol = `rgb(${pal.briarStem[0]},${pal.briarStem[1]},${pal.briarStem[2]})`;
+          const thornCol = `rgb(${pal.briarThorn[0]},${pal.briarThorn[1]},${pal.briarThorn[2]})`;
+          const veinCol = `rgb(${pal.briarVein[0]},${pal.briarVein[1]},${pal.briarVein[2]})`;
+          const bloomCol = `rgb(${pal.briarBloom[0]},${pal.briarBloom[1]},${pal.briarBloom[2]})`;
+
+          const climbH = Math.max(1, Math.ceil((Math.min(100, ivyLevel) / 100) * cp));
+          const startY = py + cp - climbH;
+
+          ctx.fillStyle = stemCol;
+          ctx.fillRect(px + ((x + y) % 2 === 0 ? 1 : cp - 3), startY, 1, climbH);
+
+          if (ivyLevel >= 36) {
+            ctx.fillStyle = thornCol;
+            ctx.fillRect(px, py + (cp >> 1), Math.max(2, cp >> 1), 2);
+            if (ivyLevel >= 55) {
+              ctx.fillRect(px + (cp >> 1), py + 1, Math.max(2, cp >> 1), 2);
+            }
+          }
+
+          if (ivyLevel >= CONFIG.IVY_WEAKEN_START) {
+            ctx.fillStyle = veinCol;
+            ctx.fillRect(px + 1, py + cp - 2, Math.max(2, cp - 3), 1);
+            if ((x + y) % 2 === 0) {
+              ctx.fillRect(px + (cp >> 1), startY, 1, Math.max(2, climbH >> 1));
+            }
+            if (ivyLevel >= 72 && ((x * 5 + y * 3) % 7 === 0)) {
+              ctx.fillStyle = bloomCol;
+              ctx.fillRect(px + (cp >> 1) - 1, py + (cp >> 1) - 1, 2, 2);
+            }
+          }
+        }
+
+        drawAshFlakesForLayer(ctx, world, lIdx, cp, now) {
+          const AF = CONFIG.ASH_FLAKES;
+          for (const fl of world.ashFlakes) {
+            if (fl.layerId !== lIdx) continue;
+
+            const ex = this.offsetX + fl.x * cp;
+            const ey = this.offsetY + fl.y * cp;
+
+            const shimmer = 0.5 + 0.5 * Math.sin(now * AF.SHIMMER_SPEED + fl.phase);
+            const c = shimmer > 0.72 ? AF.COLOR_LIGHT : (shimmer > 0.32 ? AF.COLOR_MID : AF.COLOR_DARK);
+            const alpha = fl.life * AF.PEAK_ALPHA * (0.65 + 0.35 * shimmer);
+
+            const tumble = 0.35 + 0.65 * Math.abs(Math.cos(now * AF.TUMBLE_SPEED + fl.phase));
+            const w = Math.max(1.5, fl.sizePx * fl.aspect * tumble);
+            const h = Math.max(1.5, fl.sizePx);
+
+            ctx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha.toFixed(3)})`;
+            ctx.fillRect(ex - w * 0.5, ey - h * 0.5, w, h);
+
+            if (shimmer > 0.82 && w >= 2.5) {
+              ctx.fillStyle = `rgba(${AF.COLOR_LIGHT[0]}, ${AF.COLOR_LIGHT[1]}, ${AF.COLOR_LIGHT[2]}, ${(alpha * 0.9).toFixed(3)})`;
+              ctx.fillRect(ex - w * 0.5, ey - h * 0.5, Math.max(1, w * 0.6), 1);
+            }
+          }
+        }
+
+        render(world, cursor, drag, now) {
+          const ctx = this.ctx;
+          const W = CONFIG.GRID_W;
+          const H = CONFIG.GRID_H;
+          const S = CONFIG.STATE;
+          const T = CONFIG.TREE_PART;
+          const cp = this.cellPx;
+          const gW = W * cp;
+          const gH = H * cp;
+
+          this.drawSkyAndOpalescentMoon(ctx, now);
+
+          for (let lIdx = 0; lIdx < CONFIG.LAYER_COUNT; lIdx++) {
+            const layer = world.layers[lIdx];
+            const pal = CONFIG.COLORS.LAYERS[lIdx];
+
+            const mistY = this.offsetY + (lIdx === 0 ? 48 : (lIdx === 1 ? 64 : 78)) * cp;
+            const mistGrad = ctx.createLinearGradient(0, mistY - 3 * cp, 0, mistY + 7 * cp);
+            mistGrad.addColorStop(0.0, "rgba(0,0,0,0)");
+            mistGrad.addColorStop(0.5, pal.fogColor);
+            mistGrad.addColorStop(1.0, "rgba(0,0,0,0)");
+            ctx.fillStyle = mistGrad;
+            ctx.fillRect(this.offsetX, mistY - 3 * cp, gW, 10 * cp);
+
+            for (let y = 0; y < H; y++) {
+              const py = this.offsetY + y * cp;
+              const isRasScanRow = Math.abs(y - world.rasRow) <= 1 && world.rasChargeRemaining > 0;
+
+              for (let x = 0; x < W; x++) {
+                const px = this.offsetX + x * cp;
+                const i = layer.idx(x, y);
+                const st = layer.getState(i);
+                const part = layer.getPart(i);
+
+                if (st === S.EMPTY) {
+                  const gPart = layer.ghostPart[i];
+                  if (gPart >= CONFIG.PART.BASE) {
+                    this.drawGhostPart(ctx, px, py, cp, gPart, pal, isRasScanRow, x, y, now);
+                  }
+                  continue;
+                }
+
+                if (st === S.POWERED) {
+                  const isHaunted = (layer.flags[i] & CONFIG.FLAG_HAUNTED) !== 0;
+                  this.drawStonePart(
+                    ctx, px, py, cp, part,
+                    pal.poweredMain, pal.poweredShadow, pal.poweredTrim, pal.ruinCrack,
+                    isHaunted, isRasScanRow, x, y
+                  );
+                } else if (st === S.UNPOWERED) {
+                  this.drawStonePart(
+                    ctx, px, py, cp, part,
+                    pal.unpoweredMain, pal.unpoweredShadow, pal.unpoweredTrim, pal.ruinCrack,
+                    false, false, x, y
+                  );
+                } else if (st === S.RUIN) {
+                  this.drawStonePart(
+                    ctx, px, py, cp, part,
+                    pal.ruinMain, pal.ruinShadow, pal.unpoweredTrim, pal.ruinCrack,
+                    true, false, x, y
+                  );
+                } else if (st === S.SOIL) {
+                  const isTopEdge = (part === 15);
+                  const col = ((x + y) % 6 === 0) ? pal.hillShadow : pal.hillBody;
+                  ctx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
+                  ctx.fillRect(px, py, cp, cp);
+
+                  if (isTopEdge) {
+                    ctx.fillStyle = `rgb(${pal.hillRim[0]},${pal.hillRim[1]},${pal.hillRim[2]})`;
+                    ctx.fillRect(px, py, cp, 1);
+                  }
+                } else if (st === S.PLANT) {
+                  if (part === T.TRUNK) {
+                    ctx.fillStyle = `rgb(${pal.treeBark[0]},${pal.treeBark[1]},${pal.treeBark[2]})`;
+                    ctx.fillRect(px + (cp >> 1) - 1, py, 2, cp);
+                  } else if (part === T.BOUGH) {
+                    ctx.fillStyle = `rgb(${pal.treeBark[0]},${pal.treeBark[1]},${pal.treeBark[2]})`;
+                    ctx.fillRect(px, py + (cp >> 1), cp, 1);
+                  } else {
+                    ctx.fillStyle = `rgb(${pal.treeTwig[0]},${pal.treeTwig[1]},${pal.treeTwig[2]})`;
+                    ctx.fillRect(px + (cp >> 1), py, 1, cp);
+                    ctx.fillRect(px + 1, py + (cp >> 1), cp - 2, 1);
+                  }
+                }
+
+                if (layer.ivy[i] > 0 && (st === S.UNPOWERED || st === S.RUIN)) {
+                  this.drawBriars(ctx, px, py, cp, layer.ivy[i], pal, x, y);
+                }
+              }
+            }
+
+            this.drawAshFlakesForLayer(ctx, world, lIdx, cp, now);
+          }
+
+          if (world.rasChargeRemaining > 0) {
+            const scanPy = this.offsetY + world.rasRow * cp;
+            ctx.fillStyle = "rgba(246, 204, 112, 0.055)";
+            ctx.fillRect(this.offsetX, scanPy, gW, cp);
+          }
+
+          const vig = ctx.createRadialGradient(
+            this.offsetX + gW * 0.5, this.offsetY + gH * 0.5, gH * 0.35,
+            this.offsetX + gW * 0.5, this.offsetY + gH * 0.5, gW * 0.72
+          );
+          vig.addColorStop(0.0, "rgba(0, 0, 0, 0.0)");
+          vig.addColorStop(1.0, "rgba(5, 2, 7, 0.52)");
+          ctx.fillStyle = vig;
+          ctx.fillRect(this.offsetX, this.offsetY, gW, gH);
+
+          ctx.strokeStyle = "rgba(218, 168, 78, 0.28)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(this.offsetX - 0.5, this.offsetY - 0.5, gW + 1, gH + 1);
+
+          if (drag.active) {
+            const targetLayer = world.pickNearestLayer(
+              drag.startGx, drag.startGy,
+              cursor.gx, cursor.gy
+            );
+            const planCells = Builder.makePlan(
+              drag.startGx, drag.startGy,
+              cursor.gx, cursor.gy,
+              targetLayer
+            );
+
+            ctx.fillStyle = "rgba(242, 194, 96, 0.38)";
+            for (const cell of planCells) {
+              const bx = this.offsetX + cell.x * cp;
+              const by = this.offsetY + cell.y * cp;
+              ctx.fillRect(bx + 1, by + 1, Math.max(2, cp - 2), Math.max(2, cp - 2));
+            }
+
+            const minX = Math.min(drag.startGx, cursor.gx);
+            const maxX = Math.max(drag.startGx, cursor.gx);
+            const minY = Math.min(drag.startGy, cursor.gy);
+            const maxY = Math.max(drag.startGy, cursor.gy);
+            ctx.strokeStyle = "rgba(242, 194, 96, 0.72)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(
+              this.offsetX + minX * cp,
+              this.offsetY + minY * cp,
+              (maxX - minX + 1) * cp,
+              (maxY - minY + 1) * cp
+            );
+          }
+        }
+      }
+
+      const canvas = document.getElementById("viewport");
+      const world = new World();
+      const renderer = new Renderer(canvas);
+
+      let cursor = { gx: 64, gy: 48 };
+      let drag = { active: false, startGx: 0, startGy: 0 };
+      let lastTick = 0;
+
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      canvas.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        cursor = renderer.screenToGrid(e.clientX, e.clientY);
+        drag.active = true;
+        drag.startGx = cursor.gx;
+        drag.startGy = cursor.gy;
+      });
+
+      window.addEventListener("pointermove", (e) => {
+        cursor = renderer.screenToGrid(e.clientX, e.clientY);
+      });
+
+      window.addEventListener("pointerup", () => {
+        if (!drag.active) return;
+        drag.active = false;
+
+        const spanX = dragStateSpan(drag.startGx, cursor.gx, CONFIG.MIN_W, 9);
+        const spanY = dragStateSpan(drag.startGy, cursor.gy, CONFIG.MIN_H, 14);
+
+        const targetLayer = world.pickNearestLayer(spanX[0], spanY[0], spanX[1], spanY[1]);
+        const planCells = Builder.makePlan(spanX[0], spanY[0], spanX[1], spanY[1], targetLayer);
+        targetLayer.placeBuilding(planCells);
+      });
+
+      function dragStateSpan(a, b, minSize, fallbackPad) {
+        if (Math.abs(b - a) < minSize) {
+          return [b - fallbackPad, b + (fallbackPad === 14 ? 2 : fallbackPad)];
+        }
+        return [a, b];
+      }
+
+      window.addEventListener("resize", () => renderer.resize());
+
+      const intervalMs = 1000 / CONFIG.CLOCK_HZ;
+      function loop(now) {
+        requestAnimationFrame(loop);
+        if (now - lastTick < intervalMs) return;
+        lastTick = now;
+
+        world.step(now);
+        renderer.render(world, cursor, drag, now);
+      }
+
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
